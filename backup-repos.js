@@ -16,7 +16,7 @@ const SOURCE_ORG = process.env.SOURCE_ORG;
 const BACKUP_ORG = process.env.BACKUP_ORG;
 const SOURCE_TOKEN = process.env.SOURCE_TOKEN;
 const BACKUP_TOKEN = process.env.BACKUP_TOKEN;
-const BACKUP_SCRIPT_REPO = process.env.BACKUP_SCRIPT_REPO || 'github-org-backup'; // Repo name that contains this script
+const BACKUP_SCRIPT_REPO = process.env.BACKUP_SCRIPT_REPO || 'github-org-backup';
 
 function validateConfig() {
   if (!SOURCE_ORG || !BACKUP_ORG || !SOURCE_TOKEN || !BACKUP_TOKEN) {
@@ -121,17 +121,72 @@ async function cloneAndMirrorRepo(repo, backupOctokit, tempDir) {
     const cloneUrl = `https://${SOURCE_TOKEN}@github.com/${SOURCE_ORG}/${repoName}.git`;
     
     console.log(`  → Cloning source repository...`);
-    if (!executeCommand(`git clone --mirror ${cloneUrl} ${clonePath}`)) {
+    if (!executeCommand(`git clone --mirror "${cloneUrl}" "${clonePath}"`)) {
       return false;
+    }
+
+    // Remove pull request refs - they exist in packed-refs file
+    console.log(`  → Removing PR refs...`);
+    const packedRefsPath = path.join(clonePath, 'packed-refs');
+    if (fs.existsSync(packedRefsPath)) {
+      try {
+        let packedRefs = fs.readFileSync(packedRefsPath, 'utf8');
+        const lines = packedRefs.split('\n');
+        const originalCount = lines.length;
+        
+        // Filter out PR refs
+        const filteredLines = lines.filter(line => !line.includes('refs/pull/'));
+        const removedCount = originalCount - filteredLines.length;
+        
+        if (removedCount > 0) {
+          fs.writeFileSync(packedRefsPath, filteredLines.join('\n'));
+          console.log(`  ✓ Removed ${removedCount} PR refs from packed-refs`);
+        } else {
+          console.log(`  ℹ No PR refs found in packed-refs`);
+        }
+      } catch (err) {
+        console.log(`  ⚠️  Could not clean packed-refs: ${err.message}`);
+      }
+    }
+
+    // Also check and remove refs/pull directory if it exists
+    const refsPullPath = path.join(clonePath, 'refs', 'pull');
+    if (fs.existsSync(refsPullPath)) {
+      try {
+        fs.rmSync(refsPullPath, { recursive: true, force: true });
+        console.log(`  ✓ Removed refs/pull directory`);
+      } catch (err) {
+        console.log(`  ⚠️  Could not remove refs/pull: ${err.message}`);
+      }
     }
 
     // Push to backup repository
     const backupUrl = `https://${BACKUP_TOKEN}@github.com/${BACKUP_ORG}/${repoName}.git`;
     
     console.log(`  → Pushing to backup...`);
-    if (!executeCommand(`git push --mirror ${backupUrl}`, clonePath)) {
-      // If push fails, delete the empty repo we just created
-      await deleteBackupRepo(backupOctokit, repoName);
+    
+    // Normal mirror push
+    let pushSuccess = executeCommand(`git -C "${clonePath}" push --mirror "${backupUrl}"`);
+    
+    if (!pushSuccess) {
+      console.log(`  ⚠️  Mirror push failed`);
+      console.log(`  → Trying force push without workflows...`);
+      
+      // Try pushing branches and tags separately
+      const pushBranches = executeCommand(`git -C "${clonePath}" push --force --all "${backupUrl}"`);
+      const pushTags = executeCommand(`git -C "${clonePath}" push --force --tags "${backupUrl}"`);
+      
+      if (pushBranches || pushTags) {
+        console.log(`  ⚠️  Partial backup (branches/tags only, workflows excluded)`);
+        pushSuccess = true;
+      }
+    }
+    
+    if (!pushSuccess) {
+      // If push fails, delete the empty repo we just created (if we created one)
+      if (!useExisting) {
+        await deleteBackupRepo(backupOctokit, repoName);
+      }
       return false;
     }
 
