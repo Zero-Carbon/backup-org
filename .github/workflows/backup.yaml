@@ -2,8 +2,8 @@ name: Backup Organization Repositories
 
 on:
   schedule:
-    # Runs daily at 2 AM UTC
-    - cron: '0 2 * * *'
+     # Runs daily at 12 AM IST (6:30 PM UTC previous day)
+    - cron: '30 18 * * *'
   workflow_dispatch: # Allows manual trigger
 
 jobs:
