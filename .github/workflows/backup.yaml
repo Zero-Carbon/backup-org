@@ -1,0 +1,38 @@
+name: Backup Organization Repositories
+
+on:
+  schedule:
+    # Runs daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch: # Allows manual trigger
+
+jobs:
+  backup-repos:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout backup script
+        uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Install dependencies
+        run: npm install
+      
+      - name: Run backup script
+        env:
+          SOURCE_ORG: ${{ vars.SOURCE_ORG }}
+          BACKUP_ORG: ${{ vars.BACKUP_ORG }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_ORG_TOKEN }}
+          BACKUP_TOKEN: ${{ secrets.BACKUP_ORG_TOKEN }}
+          BACKUP_SCRIPT_REPO: ${{ vars.BACKUP_SCRIPT_REPO }}
+        run: node backup-repos.js
+      
+      - name: Send notification on failure
+        if: failure()
+        run: |
+          echo "Backup failed! Check the logs."
+          # Add your notification logic here (Slack, email, etc.)
