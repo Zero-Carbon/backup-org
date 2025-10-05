@@ -42,6 +42,12 @@ function executeCommand(command, cwd = process.cwd()) {
 
 async function deleteBackupRepo(backupOctokit, repoName) {
   try {
+    // Check if repo exists first
+    await backupOctokit.repos.get({
+      owner: BACKUP_ORG,
+      repo: repoName
+    });
+    
     console.log(`  → Deleting existing backup...`);
     await backupOctokit.repos.delete({
       owner: BACKUP_ORG,
@@ -55,6 +61,10 @@ async function deleteBackupRepo(backupOctokit, repoName) {
     if (error.status === 404) {
       console.log(`  ℹ No existing backup to delete`);
       return true;
+    }
+    if (error.status === 403) {
+      console.log(`  ⚠️  Cannot delete (permission issue) - will use force push instead`);
+      return 'force-push';
     }
     console.error(`  ❌ Failed to delete: ${error.message}`);
     return false;
@@ -73,20 +83,38 @@ async function cloneAndMirrorRepo(repo, backupOctokit, tempDir) {
 
   try {
     // Delete existing backup repo first
-    await deleteBackupRepo(backupOctokit, repoName);
+    const deleteResult = await deleteBackupRepo(backupOctokit, repoName);
+    
+    if (deleteResult === false) {
+      return false;
+    }
 
-    // Create fresh backup repository
-    console.log(`  → Creating backup repository...`);
-    const { data: backupRepo } = await backupOctokit.repos.createInOrg({
-      org: BACKUP_ORG,
-      name: repoName,
-      description: `[BACKUP] ${repo.description || 'No description'}`,
-      private: repo.private,
-      has_issues: false,
-      has_wiki: false,
-      has_projects: false
-    });
-    console.log(`  ✓ Created: ${backupRepo.html_url}`);
+    let backupRepo;
+    const useExisting = deleteResult === 'force-push';
+
+    if (useExisting) {
+      // Repo exists and we can't delete it, so we'll use it
+      const { data } = await backupOctokit.repos.get({
+        owner: BACKUP_ORG,
+        repo: repoName
+      });
+      backupRepo = data;
+      console.log(`  ✓ Using existing backup repo: ${backupRepo.html_url}`);
+    } else {
+      // Create fresh backup repository
+      console.log(`  → Creating backup repository...`);
+      const { data } = await backupOctokit.repos.createInOrg({
+        org: BACKUP_ORG,
+        name: repoName,
+        description: `[BACKUP] ${repo.description || 'No description'}`,
+        private: repo.private,
+        has_issues: false,
+        has_wiki: false,
+        has_projects: false
+      });
+      backupRepo = data;
+      console.log(`  ✓ Created: ${backupRepo.html_url}`);
+    }
 
     // Clone source repository (bare clone for mirroring)
     const clonePath = path.join(tempDir, repoName);
